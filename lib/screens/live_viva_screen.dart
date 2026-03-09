@@ -20,6 +20,7 @@ class _LiveVivaScreenState extends State<LiveVivaScreen>
   late AnimationController _pulseController;
   late AnimationController _waveController;
   bool _initialized = false;
+  final _textController = TextEditingController();
 
   @override
   void initState() {
@@ -64,6 +65,7 @@ class _LiveVivaScreenState extends State<LiveVivaScreen>
   void dispose() {
     _pulseController.dispose();
     _waveController.dispose();
+    _textController.dispose();
     super.dispose();
   }
 
@@ -160,14 +162,14 @@ class _LiveVivaScreenState extends State<LiveVivaScreen>
       case LiveVivaState.connecting:
         return _buildConnectingView();
 
-      case LiveVivaState.ready:
-        return _buildReadyView();
-
       case LiveVivaState.instructorSpeaking:
         return _buildInstructorSpeakingView();
 
       case LiveVivaState.studentSpeaking:
         return _buildStudentSpeakingView();
+
+      case LiveVivaState.evaluating:
+        return _buildEvaluatingView();
 
       case LiveVivaState.complete:
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -194,29 +196,6 @@ class _LiveVivaScreenState extends State<LiveVivaScreen>
             style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                   color: AppTheme.textSecondary,
                 ),
-          ),
-        ],
-      ),
-    ).animate().fadeIn();
-  }
-
-  Widget _buildReadyView() {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _buildInstructorAvatar(isActive: false),
-          const SizedBox(height: 32),
-          Text(
-            'Your instructor is ready',
-            style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                  color: AppTheme.textPrimary,
-                ),
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            'Starting conversation...',
-            style: TextStyle(color: AppTheme.textSecondary, fontSize: 14),
           ),
         ],
       ),
@@ -250,6 +229,10 @@ class _LiveVivaScreenState extends State<LiveVivaScreen>
   }
 
   Widget _buildStudentSpeakingView() {
+    final vm = context.read<LiveVivaViewModel>();
+    if (vm.isTextMode) {
+      return _buildTextInputView(vm);
+    }
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -271,6 +254,36 @@ class _LiveVivaScreenState extends State<LiveVivaScreen>
         ],
       ),
     ).animate().fadeIn(duration: 300.ms);
+  }
+
+  Widget _buildEvaluatingView() {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(
+            width: 80,
+            height: 80,
+            child: CircularProgressIndicator(
+              color: AppTheme.primary,
+              strokeWidth: 3,
+            ),
+          ),
+          const SizedBox(height: 32),
+          Text(
+            'Evaluating your responses...',
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  color: AppTheme.textPrimary,
+                ),
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'Your instructor is reviewing your answers',
+            style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+          ),
+        ],
+      ),
+    ).animate().fadeIn();
   }
 
   Widget _buildErrorView(LiveVivaViewModel vm) {
@@ -440,7 +453,8 @@ class _LiveVivaScreenState extends State<LiveVivaScreen>
     if (vm.state == LiveVivaState.error ||
         vm.state == LiveVivaState.complete ||
         vm.state == LiveVivaState.idle ||
-        vm.state == LiveVivaState.connecting) {
+        vm.state == LiveVivaState.connecting ||
+        vm.state == LiveVivaState.evaluating) {
       return const SizedBox(height: 20);
     }
 
@@ -525,5 +539,68 @@ class _LiveVivaScreenState extends State<LiveVivaScreen>
         ],
       ),
     );
+  }
+
+  Widget _buildTextInputView(LiveVivaViewModel vm) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.keyboard_rounded,
+                color: AppTheme.accent, size: 48),
+            const SizedBox(height: 16),
+            Text(
+              'Your turn \u2014 type your answer',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    color: AppTheme.accent,
+                  ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Simulator mode \u2014 type instead of speaking',
+              style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+            ),
+            const SizedBox(height: 24),
+            GlassCard(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _textController,
+                      style: const TextStyle(color: AppTheme.textPrimary),
+                      decoration: const InputDecoration(
+                        hintText: 'Type your answer...',
+                        hintStyle: TextStyle(color: AppTheme.textSecondary),
+                        border: InputBorder.none,
+                      ),
+                      maxLines: 3,
+                      minLines: 1,
+                      textInputAction: TextInputAction.send,
+                      onSubmitted: (_) => _sendTextAnswer(vm),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    onPressed: () => _sendTextAnswer(vm),
+                    icon:
+                        const Icon(Icons.send_rounded, color: AppTheme.accent),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    ).animate().fadeIn(duration: 300.ms);
+  }
+
+  void _sendTextAnswer(LiveVivaViewModel vm) {
+    final text = _textController.text.trim();
+    if (text.isEmpty) return;
+    vm.sendTextMessage(text);
+    _textController.clear();
   }
 }

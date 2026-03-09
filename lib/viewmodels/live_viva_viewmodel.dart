@@ -1,21 +1,20 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
+import 'package:flutter/services.dart';
 import 'package:record/record.dart';
-import 'package:audioplayers/audioplayers.dart' hide AVAudioSessionCategory;
 import 'package:audio_session/audio_session.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
+import 'package:flutter_pcm_sound/flutter_pcm_sound.dart';
 import '../models/session.dart';
 
 enum LiveVivaState {
   idle,
   connecting,
-  ready, // Connected, waiting for Gemini to greet
-  instructorSpeaking, // Gemini is talking
-  studentSpeaking, // Student mic is active
+  instructorSpeaking, // Gemini is talking (greeting or response)
+  studentSpeaking, // Student's turn
+  evaluating, // Viva done, AI is evaluating responses
   complete, // Assessment done
   error,
 }
@@ -37,15 +36,12 @@ class LiveVivaViewModel extends ChangeNotifier {
 
   // Audio
   AudioRecorder? _recorder;
-  AudioPlayer? _player;
-  StreamSubscription? _playerCompleteSub;
   StreamSubscription? _recordStreamSub;
   WebSocketChannel? _channel;
   bool _isStreaming = false;
-
-  // Audio buffer for incoming Gemini audio (24kHz, 16-bit, mono PCM)
-  final List<int> _audioBuffer = [];
-  bool _isPlayingBack = false;
+  bool _pcmPlayerReady = false;
+  bool _textMode = false;
+  static const _platform = MethodChannel('com.gradeloop.ivas/platform');
 
   // Getters
   LiveVivaState get state => _state;
@@ -61,11 +57,35 @@ class LiveVivaViewModel extends ChangeNotifier {
       _totalQuestions > 0 ? _questionsScored / _totalQuestions : 0;
   bool get isInstructorSpeaking => _state == LiveVivaState.instructorSpeaking;
   bool get isStudentSpeaking => _state == LiveVivaState.studentSpeaking;
+  bool get isTextMode => _textMode;
 
   void _setState(LiveVivaState newState) {
     debugPrint('$_tag State: $_state => $newState');
     _state = newState;
     notifyListeners();
+  }
+
+  /// Initialize the PCM streaming player (24kHz, 16-bit, mono — Gemini output)
+  Future<void> _initPcmPlayer() async {
+    if (_pcmPlayerReady) return;
+    try {
+      FlutterPcmSound.setLogLevel(LogLevel.none);
+      // Feed callback — called when player needs more data. We push data
+      // directly on receive so we don't need this, but set a small buffer.
+      FlutterPcmSound.setFeedCallback((int remainingFrames) {
+        // No-op: we feed audio proactively when chunks arrive
+      });
+      await FlutterPcmSound.setup(
+        sampleRate: 24000,
+        channelCount: 1,
+      );
+      // Keep feed threshold low for low-latency playback
+      FlutterPcmSound.setFeedThreshold(8000);
+      _pcmPlayerReady = true;
+      debugPrint('$_tag PCM player initialized (24kHz mono)');
+    } catch (e) {
+      debugPrint('$_tag PCM player init error: $e');
+    }
   }
 
   /// Start a live viva session
@@ -86,6 +106,37 @@ class LiveVivaViewModel extends ChangeNotifier {
     _competencySummary = null;
 
     try {
+      // Check if running on iOS Simulator (no real audio hardware)
+      try {
+        _textMode = await _platform.invokeMethod<bool>('isSimulator') ?? false;
+      } catch (_) {
+        _textMode = false;
+      }
+      if (_textMode) {
+        debugPrint('$_tag Running on simulator — using text input mode');
+      }
+
+      // Init streaming PCM player
+      await _initPcmPlayer();
+
+      // Configure audio session for simultaneous play + record
+      if (!_textMode) {
+        final audioSession = await AudioSession.instance;
+        await audioSession.configure(AudioSessionConfiguration(
+          avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
+          avAudioSessionCategoryOptions:
+              AVAudioSessionCategoryOptions.defaultToSpeaker,
+          avAudioSessionMode: AVAudioSessionMode.spokenAudio,
+          androidAudioAttributes: const AndroidAudioAttributes(
+            contentType: AndroidAudioContentType.speech,
+            usage: AndroidAudioUsage.voiceCommunication,
+          ),
+          androidAudioFocusGainType:
+              AndroidAudioFocusGainType.gainTransientMayDuck,
+        ));
+        await audioSession.setActive(true);
+      }
+
       // Connect WebSocket
       final uri = Uri.parse('ws://$host/api/v1/assessments/sessions/live');
       debugPrint('$_tag Connecting to $uri');
@@ -126,10 +177,22 @@ class LiveVivaViewModel extends ChangeNotifier {
 
   void _handleMessage(dynamic data) {
     if (data is List<int> || data is Uint8List) {
-      // Binary = PCM audio from Gemini
-      _audioBuffer.addAll(data is Uint8List ? data : Uint8List.fromList(data));
+      // Binary = PCM audio chunk from Gemini — feed directly to speaker
+      final bytes = data is Uint8List ? data : Uint8List.fromList(data);
+      if (bytes.isEmpty) return;
+
+      // Switch to instructor speaking on first audio chunk
       if (_state != LiveVivaState.instructorSpeaking) {
         _setState(LiveVivaState.instructorSpeaking);
+      }
+
+      // Feed PCM directly to the hardware — real-time playback, no buffering
+      try {
+        FlutterPcmSound.feed(PcmArrayInt16.fromList(
+          bytes.buffer.asInt16List(),
+        ));
+      } catch (e) {
+        debugPrint('$_tag PCM feed error: $e');
       }
       return;
     }
@@ -147,21 +210,29 @@ class LiveVivaViewModel extends ChangeNotifier {
           _totalQuestions = msg['total_questions'] as int? ?? 0;
           debugPrint(
               '$_tag Ready! session=$_sessionId, questions=$_totalQuestions');
-          _setState(LiveVivaState.ready);
-          // Start streaming mic audio after a brief delay
-          Future.delayed(const Duration(milliseconds: 500), () {
-            _startStreaming();
-          });
+          // Stay in connecting (will move to instructorSpeaking when audio arrives)
+          // Start mic streaming — backend drops audio until greeting is done
+          _startStreaming();
           break;
 
         case 'turn_end':
-          // Gemini finished speaking — play buffered audio
-          debugPrint('$_tag Turn end, buffer=${_audioBuffer.length} bytes');
-          _playBufferedAudio();
+          // Gemini finished speaking — switch to student's turn
+          debugPrint('$_tag Turn end — student\'s turn now');
+          if (_state != LiveVivaState.complete &&
+              _state != LiveVivaState.error &&
+              _state != LiveVivaState.evaluating) {
+            _setState(LiveVivaState.studentSpeaking);
+          }
           break;
 
         case 'thinking':
           debugPrint('$_tag Instructor thinking...');
+          break;
+
+        case 'evaluating':
+          debugPrint('$_tag Evaluating responses...');
+          _stopStreaming();
+          _setState(LiveVivaState.evaluating);
           break;
 
         case 'score':
@@ -185,13 +256,8 @@ class LiveVivaViewModel extends ChangeNotifier {
                 .toList();
           }
           debugPrint('$_tag Complete! score=$_finalScore/$_maxScore');
-          // Don't set complete state yet — let the last audio finish playing
-          // The state will transition after playback
           _stopStreaming();
-          // Small delay to let any final audio play
-          Future.delayed(const Duration(seconds: 2), () {
-            _setState(LiveVivaState.complete);
-          });
+          _setState(LiveVivaState.complete);
           break;
 
         case 'error':
@@ -205,34 +271,31 @@ class LiveVivaViewModel extends ChangeNotifier {
     }
   }
 
+  /// Send a typed text message (text mode fallback for simulator)
+  void sendTextMessage(String text) {
+    if (text.trim().isEmpty || _channel == null) return;
+    debugPrint('$_tag Sending text message: ${text.length} chars');
+    _channel!.sink.add(jsonEncode({
+      'type': 'message',
+      'text': text.trim(),
+    }));
+    // After sending, Gemini will respond → state goes to instructorSpeaking
+    _setState(LiveVivaState.instructorSpeaking);
+  }
+
   /// Start streaming mic audio to the server
   Future<void> _startStreaming() async {
     if (_isStreaming) return;
-    // Don't start streaming if we've already errored or completed
+    if (_textMode) {
+      debugPrint('$_tag Text mode — skipping mic stream');
+      return;
+    }
     if (_state == LiveVivaState.error || _state == LiveVivaState.complete) {
-      debugPrint('$_tag Skipping mic stream — state is $_state');
       return;
     }
     debugPrint('$_tag Starting mic stream...');
 
     try {
-      // Configure audio session for simultaneous play + record
-      final audioSession = await AudioSession.instance;
-      await audioSession.setActive(false);
-      await audioSession.configure(AudioSessionConfiguration(
-        avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
-        avAudioSessionCategoryOptions:
-            AVAudioSessionCategoryOptions.defaultToSpeaker,
-        avAudioSessionMode: AVAudioSessionMode.spokenAudio,
-        androidAudioAttributes: const AndroidAudioAttributes(
-          contentType: AndroidAudioContentType.speech,
-          usage: AndroidAudioUsage.voiceCommunication,
-        ),
-        androidAudioFocusGainType:
-            AndroidAudioFocusGainType.gainTransientMayDuck,
-      ));
-      await audioSession.setActive(true);
-
       _recorder = AudioRecorder();
       final hasPerms = await _recorder!.hasPermission();
       if (!hasPerms) {
@@ -252,12 +315,16 @@ class LiveVivaViewModel extends ChangeNotifier {
       );
 
       _isStreaming = true;
-      _setState(LiveVivaState.studentSpeaking);
 
+      int chunkCount = 0;
       _recordStreamSub = stream.listen(
         (chunk) {
-          // Send raw PCM bytes to server (only when not playing back)
-          if (_channel != null && !_isPlayingBack) {
+          chunkCount++;
+          if (chunkCount <= 3 || chunkCount % 100 == 0) {
+            debugPrint('$_tag Mic chunk #$chunkCount: ${chunk.length} bytes');
+          }
+          // Always send mic audio — server handles gating (drops before greeting)
+          if (_channel != null && chunk.isNotEmpty) {
             _channel!.sink.add(chunk);
           }
         },
@@ -292,135 +359,6 @@ class LiveVivaViewModel extends ChangeNotifier {
     _recorder = null;
   }
 
-  /// Play buffered Gemini audio (24kHz, 16-bit, mono PCM)
-  Future<void> _playBufferedAudio() async {
-    if (_audioBuffer.isEmpty) {
-      debugPrint('$_tag No audio to play');
-      // Resume student speaking state
-      if (_state != LiveVivaState.complete && _state != LiveVivaState.error) {
-        _setState(LiveVivaState.studentSpeaking);
-      }
-      return;
-    }
-
-    debugPrint('$_tag Playing ${_audioBuffer.length} bytes of audio');
-    _isPlayingBack = true;
-    _setState(LiveVivaState.instructorSpeaking);
-
-    try {
-      // Wrap PCM in WAV header (24kHz, 16-bit, mono)
-      final pcmBytes = Uint8List.fromList(_audioBuffer);
-      _audioBuffer.clear();
-
-      final wavBytes = _wrapInWav(pcmBytes, 24000, 1, 16);
-
-      // Write to temp file
-      final dir = await getTemporaryDirectory();
-      final file = File(
-          '${dir.path}/gemini_audio_${DateTime.now().millisecondsSinceEpoch}.wav');
-      await file.writeAsBytes(wavBytes);
-
-      // Play
-      _player?.dispose();
-      _player = AudioPlayer();
-
-      final completer = Completer<void>();
-      _playerCompleteSub?.cancel();
-      _playerCompleteSub = _player!.onPlayerComplete.listen((_) {
-        if (!completer.isCompleted) completer.complete();
-      });
-
-      await _player!.play(DeviceFileSource(file.path));
-      await completer.future;
-
-      debugPrint('$_tag Playback finished');
-
-      // Clean up
-      _playerCompleteSub?.cancel();
-      _playerCompleteSub = null;
-      await _player?.dispose();
-      _player = null;
-
-      // Delete temp file
-      try {
-        await file.delete();
-      } catch (_) {}
-    } catch (e) {
-      debugPrint('$_tag Playback error: $e');
-    }
-
-    _isPlayingBack = false;
-
-    // Resume mic state (reconfigure audio session for recording)
-    if (_state != LiveVivaState.complete && _state != LiveVivaState.error) {
-      try {
-        final audioSession = await AudioSession.instance;
-        await audioSession.setActive(false);
-        await audioSession.configure(AudioSessionConfiguration(
-          avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
-          avAudioSessionCategoryOptions:
-              AVAudioSessionCategoryOptions.defaultToSpeaker,
-          avAudioSessionMode: AVAudioSessionMode.spokenAudio,
-          androidAudioAttributes: const AndroidAudioAttributes(
-            contentType: AndroidAudioContentType.speech,
-            usage: AndroidAudioUsage.voiceCommunication,
-          ),
-          androidAudioFocusGainType:
-              AndroidAudioFocusGainType.gainTransientMayDuck,
-        ));
-        await audioSession.setActive(true);
-      } catch (e) {
-        debugPrint('$_tag Audio session reconfigure error: $e');
-      }
-      _setState(LiveVivaState.studentSpeaking);
-    }
-  }
-
-  /// Wrap raw PCM bytes in a WAV header
-  Uint8List _wrapInWav(
-      Uint8List pcmData, int sampleRate, int channels, int bitsPerSample) {
-    final dataSize = pcmData.length;
-    final header = ByteData(44);
-
-    // RIFF header
-    header.setUint8(0, 0x52); // R
-    header.setUint8(1, 0x49); // I
-    header.setUint8(2, 0x46); // F
-    header.setUint8(3, 0x46); // F
-    header.setUint32(4, dataSize + 36, Endian.little);
-    header.setUint8(8, 0x57); // W
-    header.setUint8(9, 0x41); // A
-    header.setUint8(10, 0x56); // V
-    header.setUint8(11, 0x45); // E
-
-    // fmt chunk
-    header.setUint8(12, 0x66); // f
-    header.setUint8(13, 0x6D); // m
-    header.setUint8(14, 0x74); // t
-    header.setUint8(15, 0x20); // (space)
-    header.setUint32(16, 16, Endian.little); // chunk size
-    header.setUint16(20, 1, Endian.little); // PCM format
-    header.setUint16(22, channels, Endian.little);
-    header.setUint32(24, sampleRate, Endian.little);
-    header.setUint32(
-        28, sampleRate * channels * bitsPerSample ~/ 8, Endian.little);
-    header.setUint16(32, channels * bitsPerSample ~/ 8, Endian.little);
-    header.setUint16(34, bitsPerSample, Endian.little);
-
-    // data chunk
-    header.setUint8(36, 0x64); // d
-    header.setUint8(37, 0x61); // a
-    header.setUint8(38, 0x74); // t
-    header.setUint8(39, 0x61); // a
-    header.setUint32(40, dataSize, Endian.little);
-
-    // Combine header + PCM data
-    final result = Uint8List(44 + dataSize);
-    result.setRange(0, 44, header.buffer.asUint8List());
-    result.setRange(44, 44 + dataSize, pcmData);
-    return result;
-  }
-
   /// End the viva session
   Future<void> endViva() async {
     debugPrint('$_tag endViva()');
@@ -434,8 +372,9 @@ class LiveVivaViewModel extends ChangeNotifier {
   void dispose() {
     debugPrint('$_tag dispose()');
     _stopStreaming();
-    _playerCompleteSub?.cancel();
-    _player?.dispose();
+    try {
+      FlutterPcmSound.release();
+    } catch (_) {}
     _channel?.sink.close();
     super.dispose();
   }

@@ -51,6 +51,8 @@ class VivaViewModel extends ChangeNotifier {
   String? _hintText;
   bool _hintUsed = false;
 
+  bool _isSpeaking = false;
+  double _soundLevel = 0.0;
   String? _error;
   StreamSubscription? _wsSub;
 
@@ -58,6 +60,8 @@ class VivaViewModel extends ChangeNotifier {
   String? get sessionId => _sessionId;
   VivaState get state => _state;
   QuestionWithContext? get currentQuestion => _currentQuestion;
+  bool get isSpeaking => _isSpeaking;
+  double get soundLevel => _soundLevel;
   int get totalQuestions => _totalQuestions;
   int get answeredQuestions => _answeredQuestions;
   String get transcribedText => _transcribedText;
@@ -194,7 +198,7 @@ class VivaViewModel extends ChangeNotifier {
     }
   }
 
-  void _handleWsMessage(Map<String, dynamic> msg) {
+  Future<void> _handleWsMessage(Map<String, dynamic> msg) async {
     final type = msg['type'] as String?;
     debugPrint('$_tag ◀ WS message type=$type');
     debugPrint('$_tag   Full msg: $msg');
@@ -210,7 +214,9 @@ class VivaViewModel extends ChangeNotifier {
         _answeredQuestions++;
         debugPrint(
             '$_tag   Evaluation: score=$_lastScore, feedback=${_lastFeedback?.substring(0, (_lastFeedback!.length > 50 ? 50 : _lastFeedback!.length))}..., answered=$_answeredQuestions');
-        _playAudioIfAvailable(msg);
+
+        // Automatic flow: Play feedback audio, then next event will likely be next_question
+        await _playAudioIfAvailable(msg);
         break;
 
       case 'next_question':
@@ -226,7 +232,7 @@ class VivaViewModel extends ChangeNotifier {
         _hintUsed = false;
         _setState(VivaState.questionDisplayed);
         debugPrint('$_tag   Next question: ${_currentQuestion!.questionText}');
-        _playAudioIfAvailable(msg);
+        await _playAudioIfAvailable(msg);
         break;
 
       case 'session_complete':
@@ -241,13 +247,13 @@ class VivaViewModel extends ChangeNotifier {
         _setState(VivaState.complete);
         debugPrint(
             '$_tag ✓ Session complete! finalScore=$_finalScore/$_maxScore');
-        _playAudioIfAvailable(msg);
+        await _playAudioIfAvailable(msg);
         break;
 
       case 'instructor_response':
         _lastFeedback = msg['message'] as String?;
         debugPrint('$_tag   Instructor response: $_lastFeedback');
-        _playAudioIfAvailable(msg);
+        await _playAudioIfAvailable(msg);
         break;
 
       case 'voice_verification':
@@ -270,13 +276,42 @@ class VivaViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _playAudioIfAvailable(Map<String, dynamic> msg) {
+  Future<void> _playAudioIfAvailable(Map<String, dynamic> msg) async {
     final audioB64 = msg['audio_b64'] as String?;
     if (audioB64 != null && audioB64.isNotEmpty) {
       debugPrint('$_tag   Playing audio (${audioB64.length} chars)...');
-      _audio.playBase64Audio(audioB64);
+      _isSpeaking = true;
+      notifyListeners();
+
+      await _audio.playBase64Audio(audioB64);
+
+      _isSpeaking = false;
+      notifyListeners();
     } else {
       debugPrint('$_tag   No audio in message');
+    }
+  }
+
+  /// Request TTS from backend and play it
+  Future<void> generateAndPlaySpeech(String text) async {
+    if (text.isEmpty) return;
+
+    debugPrint('$_tag generateAndPlaySpeech("$text")');
+    try {
+      final audioB64 = await _api.generateSpeech(text);
+      if (audioB64 != null && audioB64.isNotEmpty) {
+        _isSpeaking = true;
+        notifyListeners();
+
+        await _audio.playBase64Audio(audioB64);
+
+        _isSpeaking = false;
+        notifyListeners();
+      }
+    } catch (e) {
+      debugPrint('$_tag ✗ generateAndPlaySpeech error: $e');
+      _isSpeaking = false;
+      notifyListeners();
     }
   }
 
@@ -358,6 +393,11 @@ class VivaViewModel extends ChangeNotifier {
   void updateTranscription(String text) {
     _transcribedText = text;
     debugPrint('$_tag updateTranscription: "$text"');
+    notifyListeners();
+  }
+
+  void updateSoundLevel(double level) {
+    _soundLevel = level;
     notifyListeners();
   }
 

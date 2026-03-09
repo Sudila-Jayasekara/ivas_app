@@ -3,13 +3,13 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import '../theme/app_theme.dart';
-import '../services/api_service.dart';
 import '../services/audio_service.dart';
 import '../viewmodels/auth_viewmodel.dart';
 import '../viewmodels/viva_viewmodel.dart';
 import '../widgets/animated_mic_button.dart';
 import '../widgets/question_card.dart';
 import '../widgets/glass_card.dart';
+import '../widgets/waveform_animation.dart';
 
 class VivaScreen extends StatefulWidget {
   const VivaScreen({super.key});
@@ -21,11 +21,11 @@ class VivaScreen extends StatefulWidget {
 class _VivaScreenState extends State<VivaScreen> with TickerProviderStateMixin {
   late stt.SpeechToText _speech;
   bool _speechAvailable = false;
-  bool _isSpeaking = false;
   late String? _sessionId;
   late String _assignmentId;
   late String _assignmentTitle;
   bool _initialized = false;
+  String _accumulatedTranscript = '';
 
   @override
   void initState() {
@@ -35,13 +35,33 @@ class _VivaScreenState extends State<VivaScreen> with TickerProviderStateMixin {
   }
 
   Future<void> _initSpeech() async {
-    try {
-      _speechAvailable = await _speech.initialize(
-        onError: (error) => debugPrint('STT error: $error'),
-      );
-    } catch (e) {
-      _speechAvailable = false;
+    // Retry up to 3 times — speech engine can be slow to initialize
+    for (var attempt = 1; attempt <= 3; attempt++) {
+      try {
+        _speechAvailable = await _speech.initialize(
+          onError: (error) {
+            debugPrint(
+                'STT error: ${error.errorMsg} (permanent=${error.permanent})');
+            // If the error is permanent (e.g. user denied permission), don't retry listen
+            // Transient errors (e.g. no match) are fine — we keep going
+            if (error.permanent) {
+              debugPrint('STT permanent error — mic needs re-init');
+            }
+          },
+          onStatus: (status) => debugPrint('STT status: $status'),
+        );
+        if (_speechAvailable) {
+          debugPrint('STT initialized on attempt $attempt');
+          if (mounted) setState(() {});
+          return;
+        }
+      } catch (e) {
+        debugPrint('STT init attempt $attempt failed: $e');
+      }
+      if (attempt < 3) await Future.delayed(const Duration(milliseconds: 500));
     }
+    debugPrint('STT init FAILED after 3 attempts');
+    if (mounted) setState(() {});
   }
 
   @override
@@ -78,59 +98,117 @@ class _VivaScreenState extends State<VivaScreen> with TickerProviderStateMixin {
 
     // Speak the current question via backend TTS
     if (viva.currentQuestion != null) {
-      _speakQuestion(viva.currentQuestion!.questionText);
+      viva.generateAndPlaySpeech(viva.currentQuestion!.questionText);
     }
   }
 
-  /// Request realistic TTS audio from the backend and play it.
-  Future<void> _speakQuestion(String text) async {
-    setState(() => _isSpeaking = true);
-    try {
-      final api = context.read<ApiService>();
-      final audio = context.read<AudioService>();
-      final audioB64 = await api.generateSpeech(text);
-      if (audioB64 != null && audioB64.isNotEmpty) {
-        await audio.playBase64Audio(audioB64);
-      }
-    } catch (e) {
-      debugPrint('[VivaScreen] TTS error: $e');
-    } finally {
-      if (mounted) setState(() => _isSpeaking = false);
-    }
-  }
+  // Removed _speakQuestion local method as it's now in VivaViewModel
 
   Future<void> _toggleListening() async {
     final viva = context.read<VivaViewModel>();
 
     if (viva.state == VivaState.listening) {
-      // Stop listening and submit
+      // ── User explicitly tapped stop ──
       await _speech.stop();
-      if (viva.transcribedText.isNotEmpty) {
-        await viva.submitAnswer(viva.transcribedText);
+      final fullText = _accumulatedTranscript.trim();
+      _accumulatedTranscript = '';
+      if (fullText.isNotEmpty) {
+        await viva.submitAnswer(fullText);
       } else {
         viva.proceedToNextQuestion();
       }
       return;
     }
 
+    // Re-init speech if it wasn't available (e.g. first attempt failed)
     if (!_speechAvailable) {
-      // Fallback: show text input dialog
+      await _initSpeech();
+    }
+
+    if (!_speechAvailable) {
       _showTextInputDialog();
       return;
     }
 
-    viva.setListening();
+    // Stop TTS playback AND fully release the audio player so the iOS
+    // audio session switches from playback → playAndRecord with mic active.
+    if (!mounted) return;
+    final audio = context.read<AudioService>();
+    await audio.stopPlayback();
+    await audio.prepareForRecording();
 
-    await _speech.listen(
-      onResult: (result) {
-        viva.updateTranscription(result.recognizedWords);
-        if (result.finalResult && result.recognizedWords.isNotEmpty) {
-          viva.submitAnswer(result.recognizedWords);
+    // Wait for the OS audio session to fully reconfigure
+    await Future.delayed(const Duration(milliseconds: 300));
+
+    // Cancel any stale listener before starting fresh
+    await _speech.cancel();
+
+    // Re-initialize speech engine after audio session change.
+    // On iOS, the speech recognizer can lose its audio tap when the
+    // session category was changed by audioplayers.
+    _speech = stt.SpeechToText();
+    _speechAvailable = await _speech.initialize(
+      onError: (error) {
+        debugPrint(
+            'STT error: ${error.errorMsg} (permanent=${error.permanent})');
+        if (error.permanent && mounted) {
+          debugPrint('STT permanent error during listen');
         }
       },
-      listenFor: const Duration(seconds: 30),
-      pauseFor: const Duration(seconds: 3),
-      listenOptions: stt.SpeechListenOptions(cancelOnError: true),
+      onStatus: (status) => debugPrint('STT status: $status'),
+    );
+
+    if (!_speechAvailable) {
+      debugPrint('STT re-init failed before listen — falling back to text');
+      if (mounted) _showTextInputDialog();
+      return;
+    }
+
+    _accumulatedTranscript = '';
+    viva.setListening();
+
+    _startListening(viva);
+  }
+
+  void _startListening(VivaViewModel viva) {
+    _speech.listen(
+      onResult: (result) {
+        // Build up the full transcript (accumulated + current partial)
+        final current = result.recognizedWords;
+        viva.updateTranscription(
+          _accumulatedTranscript.isEmpty
+              ? current
+              : '$_accumulatedTranscript $current',
+        );
+
+        if (result.finalResult) {
+          // Speech engine stopped due to pause — accumulate and restart
+          if (current.isNotEmpty) {
+            _accumulatedTranscript = _accumulatedTranscript.isEmpty
+                ? current
+                : '$_accumulatedTranscript $current';
+          }
+          // Auto-restart listening so mic stays active until user taps stop
+          if (viva.state == VivaState.listening) {
+            debugPrint('STT finalResult — restarting listener');
+            Future.delayed(const Duration(milliseconds: 150), () {
+              if (mounted && viva.state == VivaState.listening) {
+                _startListening(viva);
+              }
+            });
+          }
+        }
+      },
+      onSoundLevelChange: (level) {
+        viva.updateSoundLevel(level);
+      },
+      listenFor: const Duration(seconds: 60),
+      pauseFor: const Duration(seconds: 10),
+      listenOptions: stt.SpeechListenOptions(
+        cancelOnError: false,
+        partialResults: true,
+        autoPunctuation: true,
+      ),
     );
   }
 
@@ -174,6 +252,7 @@ class _VivaScreenState extends State<VivaScreen> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    _speech.cancel();
     _speech.stop();
     super.dispose();
   }
@@ -363,36 +442,13 @@ class _VivaScreenState extends State<VivaScreen> with TickerProviderStateMixin {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          // Speaking indicator
-          if (_isSpeaking)
-            Container(
-              margin: const EdgeInsets.only(bottom: 20),
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              decoration: BoxDecoration(
-                color: AppTheme.primary.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(20),
-                border:
-                    Border.all(color: AppTheme.primary.withValues(alpha: 0.2)),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.volume_up_rounded,
-                      color: AppTheme.primaryLight, size: 18),
-                  const SizedBox(width: 8),
-                  const Text(
-                    'Speaking...',
-                    style: TextStyle(
-                      color: AppTheme.primaryLight,
-                      fontSize: 13,
-                    ),
-                  ),
-                ],
-              ),
-            ).animate(onPlay: (c) => c.repeat(reverse: true)).shimmer(
-                  color: AppTheme.primary.withValues(alpha: 0.3),
-                  duration: 1500.ms,
-                ),
+          // Speaking indicator waveform
+          TalkingWaveform(
+            isSpeaking: viva.isSpeaking,
+            color: AppTheme.primaryLight,
+          ).animate(target: viva.isSpeaking ? 1 : 0).fadeIn().scaleY(),
+
+          const SizedBox(height: 16),
 
           QuestionCard(
             questionText: q.questionText,
@@ -450,44 +506,68 @@ class _VivaScreenState extends State<VivaScreen> with TickerProviderStateMixin {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Text(
-            'Listening...',
-            style: TextStyle(
-              color: AppTheme.accentLight,
-              fontSize: 16,
-              fontWeight: FontWeight.w500,
-            ),
-          )
-              .animate(onPlay: (c) => c.repeat(reverse: true))
-              .fadeIn()
-              .then()
-              .shimmer(
-                color: AppTheme.accent.withValues(alpha: 0.5),
-                duration: 1200.ms,
-              ),
+          // Sound-reactive waveform for user
+          TalkingWaveform(
+            isSpeaking: true,
+            color: AppTheme.accentLight,
+            soundLevel: viva.soundLevel,
+          ).animate().fadeIn().scaleY(),
           const SizedBox(height: 24),
-          // Real-time transcript
-          GlassCard(
-            padding: const EdgeInsets.all(20),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(minHeight: 80, maxHeight: 160),
-              child: Center(
-                child: Text(
-                  viva.transcribedText.isEmpty
-                      ? 'Start speaking...'
-                      : viva.transcribedText,
-                  style: TextStyle(
-                    color: viva.transcribedText.isEmpty
-                        ? AppTheme.textSecondary
-                        : AppTheme.textPrimary,
-                    fontSize: 16,
-                    height: 1.5,
+          // Real-time transcript with improved UI
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: GlassCard(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.mic_none_rounded,
+                          color: AppTheme.accentLight, size: 16),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Capturing Voice...',
+                        style: TextStyle(
+                          color: AppTheme.accentLight.withValues(alpha: 0.7),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ],
+                  ).animate(onPlay: (c) => c.repeat(reverse: true)).shimmer(
+                        color: AppTheme.accent.withValues(alpha: 0.3),
+                      ),
+                  const SizedBox(height: 16),
+                  ConstrainedBox(
+                    constraints:
+                        const BoxConstraints(minHeight: 60, maxHeight: 120),
+                    child: SingleChildScrollView(
+                      reverse: true,
+                      child: Text(
+                        viva.transcribedText.isEmpty
+                            ? 'Speak now, I\'m listening...'
+                            : viva.transcribedText,
+                        style: TextStyle(
+                          color: viva.transcribedText.isEmpty
+                              ? AppTheme.textSecondary.withValues(alpha: 0.5)
+                              : AppTheme.textPrimary,
+                          fontSize: 18,
+                          fontWeight: viva.transcribedText.isEmpty
+                              ? FontWeight.w400
+                              : FontWeight.w500,
+                          height: 1.5,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
                   ),
-                  textAlign: TextAlign.center,
-                ),
+                ],
               ),
             ),
-          ),
+          ).animate().slideY(begin: 0.1, duration: 400.ms).fadeIn(),
         ],
       ),
     );
@@ -546,6 +626,13 @@ class _VivaScreenState extends State<VivaScreen> with TickerProviderStateMixin {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             const SizedBox(height: 24),
+            // Speaking indicator waveform
+            TalkingWaveform(
+              isSpeaking: viva.isSpeaking,
+              color: AppTheme.accentLight,
+            ).animate(target: viva.isSpeaking ? 1 : 0).fadeIn().scaleY(),
+
+            const SizedBox(height: 16),
             // Score badge
             if (viva.lastScore != null)
               Container(
@@ -661,22 +748,28 @@ class _VivaScreenState extends State<VivaScreen> with TickerProviderStateMixin {
 
             const SizedBox(height: 28),
 
-            // Next button
+            // Next button (becomes "Skip" if speaking)
             SizedBox(
               width: double.infinity,
               height: 52,
-              child: ElevatedButton(
+              child: OutlinedButton(
                 onPressed: () {
                   final viva = context.read<VivaViewModel>();
                   viva.proceedToNextQuestion();
                   // Speak next question
                   if (viva.currentQuestion != null &&
                       viva.state != VivaState.complete) {
-                    _speakQuestion(viva.currentQuestion!.questionText);
+                    viva.generateAndPlaySpeech(
+                        viva.currentQuestion!.questionText);
                   }
                 },
+                style: OutlinedButton.styleFrom(
+                  side:
+                      BorderSide(color: AppTheme.accent.withValues(alpha: 0.5)),
+                  foregroundColor: AppTheme.accent,
+                ),
                 child: Text(
-                  viva.finalScore != null ? 'View Results' : 'Next Question →',
+                  viva.finalScore != null ? 'View Results' : 'Next Question',
                 ),
               ),
             ),

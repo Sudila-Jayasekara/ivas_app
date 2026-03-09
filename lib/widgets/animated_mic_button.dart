@@ -23,10 +23,12 @@ class _AnimatedMicButtonState extends State<AnimatedMicButton>
     with TickerProviderStateMixin {
   late AnimationController _pulseController;
   late AnimationController _rippleController;
+  late AnimationController _spinController;
   late Animation<double> _pulseAnimation;
   late Animation<double> _ripple1;
   late Animation<double> _ripple2;
   late Animation<double> _ripple3;
+  late Animation<double> _spinAnimation;
 
   @override
   void initState() {
@@ -61,6 +63,13 @@ class _AnimatedMicButtonState extends State<AnimatedMicButton>
         curve: const Interval(0.3, 1.0, curve: Curves.easeOut),
       ),
     );
+
+    _spinController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1000),
+    );
+    _spinAnimation =
+        Tween<double>(begin: 0.0, end: 1.0).animate(_spinController);
   }
 
   @override
@@ -75,12 +84,20 @@ class _AnimatedMicButtonState extends State<AnimatedMicButton>
       _rippleController.stop();
       _rippleController.reset();
     }
+
+    if (widget.isProcessing) {
+      _spinController.repeat();
+    } else {
+      _spinController.stop();
+      _spinController.reset();
+    }
   }
 
   @override
   void dispose() {
     _pulseController.dispose();
     _rippleController.dispose();
+    _spinController.dispose();
     super.dispose();
   }
 
@@ -90,7 +107,8 @@ class _AnimatedMicButtonState extends State<AnimatedMicButton>
       width: widget.size * 2,
       height: widget.size * 2,
       child: AnimatedBuilder(
-        animation: Listenable.merge([_pulseController, _rippleController]),
+        animation: Listenable.merge(
+            [_pulseController, _rippleController, _spinController]),
         builder: (context, child) {
           return Stack(
             alignment: Alignment.center,
@@ -101,6 +119,23 @@ class _AnimatedMicButtonState extends State<AnimatedMicButton>
                 _buildRipple(_ripple2.value),
                 _buildRipple(_ripple3.value),
               ],
+              // Processing spinner background
+              if (widget.isProcessing)
+                RotationTransition(
+                  turns: _spinAnimation,
+                  child: Container(
+                    width: widget.size + 12,
+                    height: widget.size + 12,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: AppTheme.accent.withValues(alpha: 0.5),
+                        width: 4,
+                        strokeAlign: BorderSide.strokeAlignOutside,
+                      ),
+                    ),
+                  ),
+                ),
               // Main button
               ScaleTransition(
                 scale: _pulseAnimation,
@@ -123,10 +158,10 @@ class _AnimatedMicButtonState extends State<AnimatedMicButton>
                       end: Alignment.bottomRight,
                     )
                   : widget.isProcessing
-                      ? LinearGradient(
+                      ? const LinearGradient(
                           colors: [
-                            AppTheme.accent.withValues(alpha: 0.7),
-                            AppTheme.primary.withValues(alpha: 0.7),
+                            AppTheme.surfaceLight,
+                            AppTheme.surface,
                           ],
                           begin: Alignment.topLeft,
                           end: Alignment.bottomRight,
@@ -136,19 +171,21 @@ class _AnimatedMicButtonState extends State<AnimatedMicButton>
                 BoxShadow(
                   color: (widget.isListening
                           ? const Color(0xFFEF4444)
-                          : AppTheme.primary)
+                          : widget.isProcessing
+                              ? AppTheme.accent
+                              : AppTheme.primary)
                       .withValues(alpha: 0.4),
-                  blurRadius: 24,
+                  blurRadius: widget.isProcessing ? 12 : 24,
                   spreadRadius: 2,
                 ),
               ],
             ),
             child: widget.isProcessing
-                ? const Padding(
-                    padding: EdgeInsets.all(20),
-                    child: CircularProgressIndicator(
-                      strokeWidth: 3,
-                      color: Colors.white,
+                ? const Center(
+                    child: Icon(
+                      Icons.hourglass_empty_rounded,
+                      color: AppTheme.accent,
+                      size: 32,
                     ),
                   )
                 : Icon(

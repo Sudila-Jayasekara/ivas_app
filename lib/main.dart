@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:audio_session/audio_session.dart';
 import 'theme/app_theme.dart';
 import 'services/api_service.dart';
 import 'services/websocket_service.dart';
@@ -22,8 +23,26 @@ import 'screens/transcript_screen.dart';
 import 'screens/admin_home_screen.dart';
 
 void main() {
-  runZonedGuarded(() {
+  runZonedGuarded(() async {
     WidgetsFlutterBinding.ensureInitialized();
+
+    // Configure the global audio session for playAndRecord so both
+    // TTS playback and microphone input work without conflicts.
+    final session = await AudioSession.instance;
+    await session.configure(const AudioSessionConfiguration(
+      avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
+      avAudioSessionCategoryOptions:
+          AVAudioSessionCategoryOptions.defaultToSpeaker,
+      avAudioSessionMode: AVAudioSessionMode.spokenAudio,
+      androidAudioAttributes: AndroidAudioAttributes(
+        contentType: AndroidAudioContentType.speech,
+        usage: AndroidAudioUsage.voiceCommunication,
+      ),
+      androidAudioFocusGainType: AndroidAudioFocusGainType.gainTransientMayDuck,
+    ));
+    await session.setActive(true);
+    debugPrint('[AudioSession] Configured for playAndRecord');
+
     FlutterError.onError = (details) {
       FlutterError.presentError(details);
       debugPrint('Flutter error: ${details.exception}');

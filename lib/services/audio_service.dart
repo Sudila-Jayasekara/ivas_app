@@ -4,12 +4,14 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
-import 'package:audioplayers/audioplayers.dart';
+import 'package:audioplayers/audioplayers.dart' hide AVAudioSessionCategory;
+import 'package:audio_session/audio_session.dart';
 
 class AudioService {
   static const String _tag = '[AudioService]';
   AudioRecorder? _recorder;
   AudioPlayer? _player;
+  StreamSubscription? _playerCompleteSub;
   bool _isRecording = false;
   String? _currentPath;
 
@@ -125,7 +127,9 @@ class AudioService {
       debugPrint('$_tag   Playing: ${file.path}');
 
       final completer = Completer<void>();
-      player.onPlayerComplete.listen((_) {
+      // Cancel any previous subscription to avoid leaks
+      await _playerCompleteSub?.cancel();
+      _playerCompleteSub = player.onPlayerComplete.listen((_) {
         if (!completer.isCompleted) completer.complete();
       });
       await player.play(DeviceFileSource(file.path));
@@ -146,8 +150,45 @@ class AudioService {
     }
   }
 
+  /// Release the audio player completely and re-activate the audio session
+  /// for recording. Call this BEFORE starting speech recognition so the
+  /// iOS audio session is not stuck in playback-only mode.
+  Future<void> prepareForRecording() async {
+    debugPrint(
+        '$_tag prepareForRecording() — releasing player, activating record session');
+    try {
+      // Fully release the player so it doesn't hold the audio session
+      await _playerCompleteSub?.cancel();
+      _playerCompleteSub = null;
+      await _player?.stop();
+      await _player?.dispose();
+      _player = null;
+
+      // Re-activate session with playAndRecord to ensure mic input works
+      final session = await AudioSession.instance;
+      await session.setActive(false);
+      await session.configure(const AudioSessionConfiguration(
+        avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
+        avAudioSessionCategoryOptions:
+            AVAudioSessionCategoryOptions.defaultToSpeaker,
+        avAudioSessionMode: AVAudioSessionMode.spokenAudio,
+        androidAudioAttributes: AndroidAudioAttributes(
+          contentType: AndroidAudioContentType.speech,
+          usage: AndroidAudioUsage.voiceCommunication,
+        ),
+        androidAudioFocusGainType:
+            AndroidAudioFocusGainType.gainTransientMayDuck,
+      ));
+      await session.setActive(true);
+      debugPrint('$_tag ✓ Audio session re-activated for recording');
+    } catch (e) {
+      debugPrint('$_tag ✗ prepareForRecording error: $e');
+    }
+  }
+
   void dispose() {
     debugPrint('$_tag dispose() called');
+    _playerCompleteSub?.cancel();
     _recorder?.dispose();
     _player?.dispose();
     _recorder = null;

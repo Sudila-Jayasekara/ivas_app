@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
 import '../theme/app_theme.dart';
+import '../models/student.dart';
 import '../viewmodels/auth_viewmodel.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -16,12 +17,38 @@ class _LoginScreenState extends State<LoginScreen> {
       TextEditingController(text: 'student.test@gradeloop.com');
   final _passwordController = TextEditingController(text: 'Test@12345!');
   bool _obscurePassword = true;
+  int _selectedRoleIndex = 0;
+
+  static const _roleOptions = [
+    {
+      'label': 'Student',
+      'email': 'student.test@gradeloop.com',
+      'icon': Icons.person_rounded
+    },
+    {
+      'label': 'Instructor',
+      'email': 'instructor.test@gradeloop.com',
+      'icon': Icons.school_rounded
+    },
+    {
+      'label': 'Admin',
+      'email': 'admin.test@gradeloop.com',
+      'icon': Icons.admin_panel_settings_rounded
+    },
+  ];
 
   @override
   void dispose() {
     _emailController.dispose();
     _passwordController.dispose();
     super.dispose();
+  }
+
+  void _selectRole(int index) {
+    setState(() {
+      _selectedRoleIndex = index;
+      _emailController.text = _roleOptions[index]['email'] as String;
+    });
   }
 
   Future<void> _handleLogin() async {
@@ -31,7 +58,18 @@ class _LoginScreenState extends State<LoginScreen> {
       _passwordController.text,
     );
     if (success && mounted) {
-      Navigator.of(context).pushReplacementNamed('/home');
+      final role = auth.userRole;
+      switch (role) {
+        case UserRole.student:
+          Navigator.of(context).pushReplacementNamed('/home');
+          break;
+        case UserRole.instructor:
+          Navigator.of(context).pushReplacementNamed('/instructor/home');
+          break;
+        case UserRole.admin:
+          Navigator.of(context).pushReplacementNamed('/admin/home');
+          break;
+      }
     }
   }
 
@@ -96,6 +134,64 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                   ).animate().fadeIn(delay: 400.ms, duration: 600.ms),
                   const SizedBox(height: 48),
+
+                  // Role selector
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: List.generate(_roleOptions.length, (i) {
+                      final opt = _roleOptions[i];
+                      final isSelected = _selectedRoleIndex == i;
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 6),
+                        child: GestureDetector(
+                          onTap: () => _selectRole(i),
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 250),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 14, vertical: 10),
+                            decoration: BoxDecoration(
+                              gradient:
+                                  isSelected ? AppTheme.primaryGradient : null,
+                              color: isSelected
+                                  ? null
+                                  : AppTheme.surfaceLight
+                                      .withValues(alpha: 0.5),
+                              borderRadius: BorderRadius.circular(14),
+                              border: isSelected
+                                  ? null
+                                  : Border.all(
+                                      color:
+                                          Colors.white.withValues(alpha: 0.1)),
+                            ),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(opt['icon'] as IconData,
+                                    color: isSelected
+                                        ? Colors.white
+                                        : AppTheme.textSecondary,
+                                    size: 22),
+                                const SizedBox(height: 4),
+                                Text(
+                                  opt['label'] as String,
+                                  style: TextStyle(
+                                    color: isSelected
+                                        ? Colors.white
+                                        : AppTheme.textSecondary,
+                                    fontSize: 11,
+                                    fontWeight: isSelected
+                                        ? FontWeight.w600
+                                        : FontWeight.w400,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      );
+                    }),
+                  ).animate().fadeIn(delay: 450.ms),
+                  const SizedBox(height: 24),
 
                   // Email field
                   TextField(

@@ -4,6 +4,8 @@ import 'package:http/http.dart' as http;
 import '../models/student.dart';
 import '../models/assignment.dart';
 import '../models/session.dart';
+import '../models/grading_criteria.dart';
+import '../models/question.dart';
 
 class ApiService {
   static const String _tag = '[ApiService]';
@@ -17,16 +19,49 @@ class ApiService {
     debugPrint('$_tag Initialized with baseUrl: ${baseUrl ?? _defaultBaseUrl}');
   }
 
-  // ── Auth (hardcoded) ──────────────────────────────────────────────
-  static const String hardcodedEmail = 'student.test@gradeloop.com';
+  // ── Auth (hardcoded credentials for 3 roles) ─────────────────────
   static const String hardcodedPassword = 'Test@12345!';
   static const String hardcodedStudentId =
       '4220e987-8f0b-4196-b691-6c33620d4238';
 
-  bool validateCredentials(String email, String password) {
-    final valid = email == hardcodedEmail && password == hardcodedPassword;
-    debugPrint('$_tag validateCredentials(email=$email) => $valid');
-    return valid;
+  static const Map<String, Map<String, String>> _users = {
+    'student.test@gradeloop.com': {
+      'id': '4220e987-8f0b-4196-b691-6c33620d4238',
+      'name': 'Test Student',
+      'role': 'student',
+    },
+    'instructor.test@gradeloop.com': {
+      'id': 'inst-001',
+      'name': 'Test Instructor',
+      'role': 'instructor',
+    },
+    'admin.test@gradeloop.com': {
+      'id': 'admin-001',
+      'name': 'Test Admin',
+      'role': 'admin',
+    },
+  };
+
+  /// Validates credentials and returns an [AppUser] or null.
+  AppUser? validateCredentials(String email, String password) {
+    if (password != hardcodedPassword) {
+      debugPrint('$_tag validateCredentials($email) => invalid password');
+      return null;
+    }
+    final user = _users[email];
+    if (user == null) {
+      debugPrint('$_tag validateCredentials($email) => unknown email');
+      return null;
+    }
+    final role = UserRole.values.firstWhere((r) => r.name == user['role']);
+    final appUser = AppUser(
+      id: user['id']!,
+      name: user['name']!,
+      email: email,
+      role: role,
+    );
+    debugPrint('$_tag validateCredentials($email) => ${role.name}');
+    return appUser;
   }
 
   // ── Helper for logging HTTP responses ──────────────────────────────
@@ -403,6 +438,291 @@ class ApiService {
     } catch (e) {
       _logError('POST', url, e);
       return null;
+    }
+  }
+
+  // ── Session Detail ────────────────────────────────────────────────
+  Future<AssessmentSession> getSession(String sessionId) async {
+    final url = '$baseUrl/api/v1/assessments/sessions/$sessionId';
+    _logRequest('GET', url);
+    try {
+      final res = await _client.get(Uri.parse(url));
+      _logResponse('GET', url, res.statusCode, res.body);
+      if (res.statusCode == 200) {
+        return AssessmentSession.fromSessionJson(jsonDecode(res.body));
+      }
+      throw ApiException('Failed to fetch session: ${res.statusCode}');
+    } catch (e) {
+      _logError('GET', url, e);
+      rethrow;
+    }
+  }
+
+  Future<void> pauseSession(String sessionId) async {
+    final url = '$baseUrl/api/v1/assessments/sessions/$sessionId/pause';
+    _logRequest('PUT', url);
+    try {
+      final res = await _client.put(Uri.parse(url));
+      _logResponse('PUT', url, res.statusCode, res.body);
+      if (res.statusCode != 200) {
+        throw ApiException('Failed to pause session: ${res.statusCode}');
+      }
+    } catch (e) {
+      _logError('PUT', url, e);
+      rethrow;
+    }
+  }
+
+  // ── Instructor endpoints ──────────────────────────────────────────
+  Future<List<Map<String, dynamic>>> getInstructorAssessments(
+    String instructorId, {
+    List<String>? assignmentIds,
+    String? studentId,
+    String? status,
+    String? startDate,
+    String? endDate,
+  }) async {
+    final params = <String, String>{};
+    if (assignmentIds != null && assignmentIds.isNotEmpty) {
+      params['assignment_ids'] = assignmentIds.join(',');
+    }
+    if (studentId != null) params['student_id'] = studentId;
+    if (status != null) params['status'] = status;
+    if (startDate != null) params['start_date'] = startDate;
+    if (endDate != null) params['end_date'] = endDate;
+
+    final uri =
+        Uri.parse('$baseUrl/api/v1/instructors/$instructorId/assessments')
+            .replace(queryParameters: params.isEmpty ? null : params);
+    _logRequest('GET', uri.toString());
+    try {
+      final res = await _client.get(uri);
+      _logResponse('GET', uri.toString(), res.statusCode, res.body);
+      if (res.statusCode == 200) {
+        final json = jsonDecode(res.body);
+        final data =
+            json['data'] as List? ?? json['assessments'] as List? ?? [];
+        return data.cast<Map<String, dynamic>>();
+      }
+      throw ApiException(
+          'Failed to fetch instructor assessments: ${res.statusCode}');
+    } catch (e) {
+      _logError('GET', uri.toString(), e);
+      rethrow;
+    }
+  }
+
+  // ── Grading Criteria ──────────────────────────────────────────────
+  Future<GenerateResult> generateGradingCriteria(String assignmentId) async {
+    final url =
+        '$baseUrl/api/v1/assignments/$assignmentId/grading-criteria/generate';
+    _logRequest('POST', url);
+    try {
+      final res = await _client.post(
+        Uri.parse(url),
+        headers: {'Content-Type': 'application/json'},
+      );
+      _logResponse('POST', url, res.statusCode, res.body);
+      if (res.statusCode == 200) {
+        return GenerateResult.fromJson(jsonDecode(res.body));
+      }
+      throw ApiException(
+          'Failed to generate grading criteria: ${res.statusCode} ${res.body}');
+    } catch (e) {
+      _logError('POST', url, e);
+      rethrow;
+    }
+  }
+
+  Future<List<GradingCriteria>> getGradingCriteria(
+    String assignmentId, {
+    String? competency,
+    int? difficultyLevel,
+  }) async {
+    final params = <String, String>{};
+    if (competency != null) params['competency'] = competency;
+    if (difficultyLevel != null) {
+      params['difficulty_level'] = difficultyLevel.toString();
+    }
+    final uri =
+        Uri.parse('$baseUrl/api/v1/assignments/$assignmentId/grading-criteria')
+            .replace(queryParameters: params.isEmpty ? null : params);
+    _logRequest('GET', uri.toString());
+    try {
+      final res = await _client.get(uri);
+      _logResponse('GET', uri.toString(), res.statusCode, res.body);
+      if (res.statusCode == 200) {
+        final json = jsonDecode(res.body);
+        final items = json['data'] as List? ?? [];
+        return items.map((e) => GradingCriteria.fromJson(e)).toList();
+      }
+      throw ApiException('Failed to fetch grading criteria: ${res.statusCode}');
+    } catch (e) {
+      _logError('GET', uri.toString(), e);
+      rethrow;
+    }
+  }
+
+  Future<GradingCriteria> updateGradingCriteria(
+    String criteriaId,
+    Map<String, dynamic> updates,
+  ) async {
+    final url = '$baseUrl/api/v1/grading-criteria/$criteriaId';
+    _logRequest('PATCH', url);
+    try {
+      final res = await _client.patch(
+        Uri.parse(url),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(updates),
+      );
+      _logResponse('PATCH', url, res.statusCode, res.body);
+      if (res.statusCode == 200) {
+        return GradingCriteria.fromJson(jsonDecode(res.body));
+      }
+      throw ApiException(
+          'Failed to update grading criteria: ${res.statusCode}');
+    } catch (e) {
+      _logError('PATCH', url, e);
+      rethrow;
+    }
+  }
+
+  // ── Questions ─────────────────────────────────────────────────────
+  Future<GenerateResult> generateQuestions(
+    String assignmentId, {
+    int count = 5,
+  }) async {
+    final url = '$baseUrl/api/v1/assignments/$assignmentId/questions/generate';
+    _logRequest('POST', url);
+    try {
+      final res = await _client.post(
+        Uri.parse(url),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'count': count}),
+      );
+      _logResponse('POST', url, res.statusCode, res.body);
+      if (res.statusCode == 200) {
+        return GenerateResult.fromJson(jsonDecode(res.body));
+      }
+      throw ApiException(
+          'Failed to generate questions: ${res.statusCode} ${res.body}');
+    } catch (e) {
+      _logError('POST', url, e);
+      rethrow;
+    }
+  }
+
+  Future<List<QuestionOut>> getQuestions(
+    String assignmentId, {
+    String? competency,
+    int? difficulty,
+    String? status,
+  }) async {
+    final params = <String, String>{};
+    if (competency != null) params['competency'] = competency;
+    if (difficulty != null) params['difficulty'] = difficulty.toString();
+    if (status != null) params['status'] = status;
+    final uri = Uri.parse('$baseUrl/api/v1/assignments/$assignmentId/questions')
+        .replace(queryParameters: params.isEmpty ? null : params);
+    _logRequest('GET', uri.toString());
+    try {
+      final res = await _client.get(uri);
+      _logResponse('GET', uri.toString(), res.statusCode, res.body);
+      if (res.statusCode == 200) {
+        final json = jsonDecode(res.body);
+        final items = json['data'] as List? ?? [];
+        return items.map((e) => QuestionOut.fromJson(e)).toList();
+      }
+      throw ApiException('Failed to fetch questions: ${res.statusCode}');
+    } catch (e) {
+      _logError('GET', uri.toString(), e);
+      rethrow;
+    }
+  }
+
+  // ── Admin / LLM endpoints ────────────────────────────────────────
+  Future<Map<String, dynamic>> getHealth() async {
+    final url = '$baseUrl/health';
+    _logRequest('GET', url);
+    try {
+      final res = await _client.get(Uri.parse(url));
+      _logResponse('GET', url, res.statusCode, res.body);
+      if (res.statusCode == 200) {
+        return jsonDecode(res.body) as Map<String, dynamic>;
+      }
+      throw ApiException('Health check failed: ${res.statusCode}');
+    } catch (e) {
+      _logError('GET', url, e);
+      rethrow;
+    }
+  }
+
+  Future<Map<String, dynamic>> getReady() async {
+    final url = '$baseUrl/ready';
+    _logRequest('GET', url);
+    try {
+      final res = await _client.get(Uri.parse(url));
+      _logResponse('GET', url, res.statusCode, res.body);
+      if (res.statusCode == 200) {
+        return jsonDecode(res.body) as Map<String, dynamic>;
+      }
+      throw ApiException('Ready check failed: ${res.statusCode}');
+    } catch (e) {
+      _logError('GET', url, e);
+      rethrow;
+    }
+  }
+
+  Future<Map<String, dynamic>> getLLMProvider() async {
+    final url = '$baseUrl/llm/provider';
+    _logRequest('GET', url);
+    try {
+      final res = await _client.get(Uri.parse(url));
+      _logResponse('GET', url, res.statusCode, res.body);
+      if (res.statusCode == 200) {
+        return jsonDecode(res.body) as Map<String, dynamic>;
+      }
+      throw ApiException('Failed to get LLM provider: ${res.statusCode}');
+    } catch (e) {
+      _logError('GET', url, e);
+      rethrow;
+    }
+  }
+
+  Future<Map<String, dynamic>> switchLLMProvider(String provider) async {
+    final url = '$baseUrl/llm/provider/switch';
+    _logRequest('POST', url);
+    try {
+      final res = await _client.post(
+        Uri.parse(url),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'provider': provider}),
+      );
+      _logResponse('POST', url, res.statusCode, res.body);
+      if (res.statusCode == 200) {
+        return jsonDecode(res.body) as Map<String, dynamic>;
+      }
+      throw ApiException(
+          'Failed to switch LLM provider: ${res.statusCode} ${res.body}');
+    } catch (e) {
+      _logError('POST', url, e);
+      rethrow;
+    }
+  }
+
+  Future<Map<String, dynamic>> getLLMHealth() async {
+    final url = '$baseUrl/llm/provider/health';
+    _logRequest('GET', url);
+    try {
+      final res = await _client.get(Uri.parse(url));
+      _logResponse('GET', url, res.statusCode, res.body);
+      if (res.statusCode == 200) {
+        return jsonDecode(res.body) as Map<String, dynamic>;
+      }
+      throw ApiException('Failed to get LLM health: ${res.statusCode}');
+    } catch (e) {
+      _logError('GET', url, e);
+      rethrow;
     }
   }
 }

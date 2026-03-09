@@ -9,11 +9,17 @@ import 'viewmodels/auth_viewmodel.dart';
 import 'viewmodels/home_viewmodel.dart';
 import 'viewmodels/verification_viewmodel.dart';
 import 'viewmodels/viva_viewmodel.dart';
+import 'viewmodels/instructor_viewmodel.dart';
+import 'viewmodels/admin_viewmodel.dart';
 import 'screens/login_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/verification_screen.dart';
 import 'screens/viva_screen.dart';
 import 'screens/results_screen.dart';
+import 'screens/instructor_home_screen.dart';
+import 'screens/assignment_detail_screen.dart';
+import 'screens/transcript_screen.dart';
+import 'screens/admin_home_screen.dart';
 
 void main() {
   runZonedGuarded(() {
@@ -67,6 +73,12 @@ class _IvasAppState extends State<IvasApp> {
         ChangeNotifierProvider(
           create: (_) => VivaViewModel(_apiService, _wsService, _audioService),
         ),
+        ChangeNotifierProvider(
+          create: (_) => InstructorViewModel(_apiService),
+        ),
+        ChangeNotifierProvider(
+          create: (_) => AdminViewModel(_apiService),
+        ),
       ],
       child: MaterialApp(
         title: 'IVAS — Viva Assessment',
@@ -79,6 +91,10 @@ class _IvasAppState extends State<IvasApp> {
           '/verification': (context) => const VerificationScreen(),
           '/viva': (context) => const VivaScreen(),
           '/results': (context) => const ResultsScreen(),
+          '/instructor/home': (context) => const InstructorHomeScreen(),
+          '/instructor/assignment': (context) => const AssignmentDetailScreen(),
+          '/instructor/transcript': (context) => const TranscriptScreen(),
+          '/admin/home': (context) => const AdminHomeScreen(),
         },
       ),
     );

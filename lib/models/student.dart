@@ -1,3 +1,21 @@
+enum UserRole { student, instructor, admin }
+
+class AppUser {
+  final String id;
+  final String name;
+  final String email;
+  final UserRole role;
+  final String? courseId;
+
+  AppUser({
+    required this.id,
+    required this.name,
+    required this.email,
+    required this.role,
+    this.courseId,
+  });
+}
+
 class Student {
   final String id;
   final String name;

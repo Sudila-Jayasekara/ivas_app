@@ -31,14 +31,17 @@ class AssessmentSession {
     return AssessmentSession(
       sessionId: json['session_id'] as String,
       status: json['status'] as String? ?? 'in_progress',
-      firstQuestion: json['first_question'] != null
-          ? QuestionWithContext.fromJson(json['first_question'])
-          : null,
+      firstQuestion: (json['current_question'] != null)
+          ? QuestionWithContext.fromJson(json['current_question'])
+          : (json['first_question'] != null
+              ? QuestionWithContext.fromJson(json['first_question'])
+              : null),
       totalQuestions: json['total_questions'] as int? ?? 0,
     );
   }
 
-  factory AssessmentSession.fromSessionJson(Map<String, dynamic> json) {
+  factory AssessmentSession.fromSessionJson(Map<String, dynamic> json,
+      {QuestionWithContext? currentQuestion}) {
     final session = json['session'] as Map<String, dynamic>? ?? json;
     return AssessmentSession(
       sessionId:
@@ -46,6 +49,7 @@ class AssessmentSession {
       studentId: session['student_id'] as String?,
       assignmentId: session['assignment_id'] as String?,
       status: session['status'] as String? ?? '',
+      firstQuestion: currentQuestion,
       totalQuestions: json['total_questions'] as int? ?? 0,
       startedAt: session['started_at'] != null
           ? DateTime.tryParse(session['started_at'])

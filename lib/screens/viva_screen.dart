@@ -22,6 +22,7 @@ class _VivaScreenState extends State<VivaScreen> with TickerProviderStateMixin {
   late FlutterTts _tts;
   bool _speechAvailable = false;
   bool _isSpeaking = false;
+  late String? _sessionId;
   late String _assignmentId;
   late String _assignmentTitle;
   bool _initialized = false;
@@ -62,23 +63,31 @@ class _VivaScreenState extends State<VivaScreen> with TickerProviderStateMixin {
           ModalRoute.of(context)!.settings.arguments as Map<String, dynamic>;
       _assignmentId = args['assignmentId'] as String;
       _assignmentTitle = args['assignmentTitle'] as String;
+      _sessionId = args['sessionId'] as String?;
       _initialized = true;
 
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        _startViva();
+        _startOrResumeViva();
       });
     }
   }
 
-  Future<void> _startViva() async {
+  Future<void> _startOrResumeViva() async {
     final auth = context.read<AuthViewModel>();
     final viva = context.read<VivaViewModel>();
-    await viva.startViva(
-      studentId: auth.studentId,
-      assignmentId: _assignmentId,
-    );
 
-    // Speak the first question
+    if (_sessionId != null) {
+      await viva.resumeViva(
+        sessionId: _sessionId!,
+      );
+    } else {
+      await viva.startViva(
+        studentId: auth.studentId,
+        assignmentId: _assignmentId,
+      );
+    }
+
+    // Speak the current question
     if (viva.currentQuestion != null) {
       _speakQuestion(viva.currentQuestion!.questionText);
     }
@@ -284,6 +293,38 @@ class _VivaScreenState extends State<VivaScreen> with TickerProviderStateMixin {
         ).animate().fadeIn();
 
       case VivaState.questionDisplayed:
+        if (viva.currentQuestion == null) {
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 32),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.quiz_rounded,
+                      color: AppTheme.warning, size: 56),
+                  const SizedBox(height: 16),
+                  Text(
+                    'No questions available for this assignment yet.',
+                    style: Theme.of(context).textTheme.titleMedium,
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'The instructor may not have added questions. Try another assignment.',
+                    style:
+                        TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 24),
+                  ElevatedButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: const Text('Go Back'),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
         return _buildQuestionView(viva)
             .animate()
             .fadeIn(duration: 500.ms)

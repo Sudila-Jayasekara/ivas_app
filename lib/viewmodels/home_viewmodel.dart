@@ -49,36 +49,11 @@ class HomeViewModel extends ChangeNotifier {
         debugPrint('$_tag   Session: ${s.sessionId} status=${s.status}');
       }
     } catch (e) {
-      debugPrint('$_tag ⚠ API error ($e), using fallback mock data');
-      // Fallback mock data if API isn't running
-      _assignments = [
-        Assignment(
-          assignmentId: 'assign-001',
-          instructorId: 'inst-001',
-          courseId: 'course-001',
-          title: 'Introduction to Loops',
-          competencies: ['loops', 'iteration', 'control-flow'],
-          learningObjectives: ['Understand for loops', 'Apply while loops'],
-          difficultyMin: 1,
-          difficultyMax: 3,
-        ),
-        Assignment(
-          assignmentId: 'assign-002',
-          instructorId: 'inst-002',
-          courseId: 'course-002',
-          title: 'Data Structures: Arrays & Lists',
-          competencies: ['arrays', 'lists', 'indexing'],
-          learningObjectives: [
-            'Master array operations',
-            'Understand linked lists'
-          ],
-          difficultyMin: 2,
-          difficultyMax: 4,
-        ),
-      ];
+      debugPrint('$_tag ✗ API error ($e)');
+      _error = 'Unable to fetch data. Please check your connection.';
+      _assignments = [];
       _sessions = [];
-      _error = null; // Don't show error for fallback
-      debugPrint('$_tag ✓ Using ${_assignments.length} fallback assignments');
+      notifyListeners();
     }
 
     _isLoading = false;

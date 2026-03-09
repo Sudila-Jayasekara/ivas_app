@@ -38,9 +38,13 @@ class AuthViewModel extends ChangeNotifier {
       return false;
     }
 
-    debugPrint('$_tag ✓ Credentials valid, fetching student profile...');
+    debugPrint(
+        '$_tag ✓ Credentials valid, fetching student profile for ID: ${ApiService.hardcodedStudentId}...');
     try {
+      debugPrint(
+          '$_tag   Calling _api.getStudent(${ApiService.hardcodedStudentId})...');
       _student = await _api.getStudent(ApiService.hardcodedStudentId);
+      debugPrint('$_tag   _api.getStudent returned student: ${_student?.name}');
       _isLoggedIn = true;
       _isLoading = false;
       debugPrint(
@@ -48,20 +52,11 @@ class AuthViewModel extends ChangeNotifier {
       notifyListeners();
       return true;
     } catch (e) {
-      debugPrint('$_tag ⚠ API unreachable ($e), using fallback student');
-      // If mock API is not running, create a fallback student
-      _student = Student(
-        id: ApiService.hardcodedStudentId,
-        name: 'Alice Johnson',
-        courseId: 'course-001',
-        email: ApiService.hardcodedEmail,
-      );
-      _isLoggedIn = true;
+      debugPrint('$_tag ✗ API error ($e)');
+      _error = 'Unable to connect to service. Please check your connection.';
       _isLoading = false;
-      debugPrint(
-          '$_tag ✓ Login success (fallback) — student: ${_student!.name}');
       notifyListeners();
-      return true;
+      return false;
     }
   }
 

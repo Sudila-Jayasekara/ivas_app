@@ -134,7 +134,16 @@ class _HomeScreenState extends State<HomeScreen> {
                                 questionsAnswered: session.responsesGiven,
                                 totalQuestions: session.questionsAsked,
                                 onTap: () {
-                                  // Resume would go here
+                                  Navigator.of(context).pushNamed(
+                                    '/viva',
+                                    arguments: {
+                                      'assignmentId': session.assignmentId,
+                                      'assignmentTitle':
+                                          home.getAssignmentTitle(
+                                              session.assignmentId),
+                                      'sessionId': session.sessionId,
+                                    },
+                                  );
                                 },
                               ),
                             )

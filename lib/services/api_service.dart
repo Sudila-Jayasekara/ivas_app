@@ -20,7 +20,8 @@ class ApiService {
   // ── Auth (hardcoded) ──────────────────────────────────────────────
   static const String hardcodedEmail = 'student.test@gradeloop.com';
   static const String hardcodedPassword = 'Test@12345!';
-  static const String hardcodedStudentId = 'stud-001';
+  static const String hardcodedStudentId =
+      '4220e987-8f0b-4196-b691-6c33620d4238';
 
   bool validateCredentials(String email, String password) {
     final valid = email == hardcodedEmail && password == hardcodedPassword;
@@ -45,7 +46,7 @@ class ApiService {
 
   // ── Mock endpoints ────────────────────────────────────────────────
   Future<Student> getStudent(String studentId) async {
-    final url = '$baseUrl/mock/students/$studentId';
+    final url = '$baseUrl/api/v1/students/$studentId';
     _logRequest('GET', url);
     try {
       final res = await _client.get(Uri.parse(url));
@@ -64,7 +65,7 @@ class ApiService {
   }
 
   Future<List<Student>> getStudents() async {
-    final url = '$baseUrl/mock/students';
+    final url = '$baseUrl/api/v1/students';
     _logRequest('GET', url);
     try {
       final res = await _client.get(Uri.parse(url));
@@ -84,7 +85,7 @@ class ApiService {
   }
 
   Future<List<Assignment>> getAssignments() async {
-    final url = '$baseUrl/mock/assignments';
+    final url = '$baseUrl/api/v1/assignments';
     _logRequest('GET', url);
     try {
       final res = await _client.get(Uri.parse(url));
@@ -104,7 +105,7 @@ class ApiService {
   }
 
   Future<Assignment> getAssignment(String assignmentId) async {
-    final url = '$baseUrl/mock/assignments/$assignmentId';
+    final url = '$baseUrl/api/v1/assignments/$assignmentId';
     _logRequest('GET', url);
     try {
       final res = await _client.get(Uri.parse(url));
@@ -176,6 +177,29 @@ class ApiService {
           'Failed to trigger assessment: ${res.statusCode} ${res.body}');
     } catch (e) {
       _logError('POST', url, e);
+      rethrow;
+    }
+  }
+
+  Future<AssessmentSession> resumeAssessment(String sessionId) async {
+    final url = '$baseUrl/api/v1/assessments/sessions/$sessionId/resume';
+    debugPrint('$_tag ➜ PUT $url');
+    try {
+      final res = await _client.put(
+        Uri.parse(url),
+        headers: {'Content-Type': 'application/json'},
+      );
+      _logResponse('PUT', url, res.statusCode, res.body);
+      if (res.statusCode == 200) {
+        final session = AssessmentSession.fromTriggerJson(jsonDecode(res.body));
+        debugPrint(
+            '$_tag   Session resumed: ${session.sessionId}, totalQ=${session.totalQuestions}');
+        return session;
+      }
+      throw ApiException(
+          'Failed to resume assessment: ${res.statusCode} ${res.body}');
+    } catch (e) {
+      _logError('PUT', url, e);
       rethrow;
     }
   }

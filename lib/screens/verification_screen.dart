@@ -18,6 +18,18 @@ class _VerificationScreenState extends State<VerificationScreen> {
   late String _assignmentTitle;
   bool _initialized = false;
 
+  // Different phrases for each voice sample
+  static const List<String> _samplePrompts = [
+    '"Hello, my name is a student at this university and I am ready for my viva."',
+    '"The quick brown fox jumps over the lazy dog near the riverbank."',
+    '"I enjoy studying computer science and solving complex problems every day."',
+  ];
+
+  String _getCurrentPrompt(int sampleCount) {
+    if (sampleCount >= _samplePrompts.length) return _samplePrompts.last;
+    return _samplePrompts[sampleCount];
+  }
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -131,6 +143,46 @@ class _VerificationScreenState extends State<VerificationScreen> {
                                 ),
                         textAlign: TextAlign.center,
                       ).animate().fadeIn(delay: 300.ms),
+
+                      const SizedBox(height: 16),
+
+                      // Voice prompt card — shows what to read aloud
+                      if (vm.state == VerificationState.notEnrolled ||
+                          vm.state == VerificationState.enrolling ||
+                          vm.state == VerificationState.recording)
+                        GlassCard(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                            children: [
+                              const Row(
+                                children: [
+                                  Icon(Icons.record_voice_over_rounded,
+                                      color: AppTheme.primary, size: 18),
+                                  SizedBox(width: 8),
+                                  Text('Read aloud:',
+                                      style: TextStyle(
+                                          color: AppTheme.textSecondary,
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w600)),
+                                ],
+                              ),
+                              const SizedBox(height: 10),
+                              Text(
+                                _getCurrentPrompt(vm.sampleCount),
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodyLarge
+                                    ?.copyWith(
+                                      fontStyle: FontStyle.italic,
+                                      color:
+                                          Colors.white.withValues(alpha: 0.9),
+                                      height: 1.5,
+                                    ),
+                                textAlign: TextAlign.center,
+                              ),
+                            ],
+                          ),
+                        ).animate().fadeIn(delay: 400.ms).slideY(begin: 0.1),
 
                       const SizedBox(height: 12),
 

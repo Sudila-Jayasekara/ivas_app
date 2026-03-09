@@ -125,6 +125,62 @@ class VivaViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Resume an existing viva
+  Future<void> resumeViva({
+    required String sessionId,
+    bool useWebSocket = false,
+  }) async {
+    debugPrint('$_tag ════════════════════════════════════════');
+    debugPrint('$_tag resumeViva(sessionId=$sessionId, ws=$useWebSocket)');
+    _setState(VivaState.loading);
+    _error = null;
+    _useWebSocket = useWebSocket;
+    _sessionId = sessionId;
+    _hintText = null;
+    _hintUsed = false;
+    notifyListeners();
+
+    try {
+      debugPrint('$_tag   Resuming session...');
+      final session = await _api.resumeAssessment(sessionId);
+
+      _totalQuestions = session.totalQuestions;
+      _currentQuestion = session.firstQuestion;
+
+      // We need to know how many were answered.
+      // Since firstQuestion from resume is the *current* unanswered one,
+      // we can't easily get answered count from trigger response.
+      // Let's fetch session details to be sure.
+      try {
+        final sessions =
+            await _api.getStudentSessions(ApiService.hardcodedStudentId);
+        final thisSession =
+            sessions.firstWhere((s) => s.sessionId == sessionId);
+        _answeredQuestions = thisSession.responsesGiven;
+      } catch (e) {
+        debugPrint('$_tag   Could not fetch exact answered count: $e');
+        _answeredQuestions = 0; // Fallback
+      }
+
+      debugPrint(
+          '$_tag ✓ Session resumed: id=$_sessionId, totalQ=$_totalQuestions, answered=$_answeredQuestions');
+      debugPrint(
+          '$_tag   Current question: ${_currentQuestion?.questionText ?? 'null'}');
+
+      if (_useWebSocket && _currentQuestion != null) {
+        debugPrint('$_tag   Connecting WebSocket...');
+        _connectWebSocket();
+      }
+
+      _setState(VivaState.questionDisplayed);
+    } catch (e) {
+      debugPrint('$_tag ✗ resumeViva failed: $e');
+      _setState(VivaState.error);
+      _error = 'Failed to resume viva: $e';
+    }
+    notifyListeners();
+  }
+
   void _connectWebSocket() {
     debugPrint('$_tag _connectWebSocket(sessionId=$_sessionId)');
     _ws.connect(_sessionId!);

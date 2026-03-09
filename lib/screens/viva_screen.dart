@@ -439,63 +439,65 @@ class _VivaScreenState extends State<VivaScreen> with TickerProviderStateMixin {
     final q = viva.currentQuestion!;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 24),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          // Speaking indicator waveform
-          TalkingWaveform(
-            isSpeaking: viva.isSpeaking,
-            color: AppTheme.primaryLight,
-          ).animate(target: viva.isSpeaking ? 1 : 0).fadeIn().scaleY(),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            // Speaking indicator waveform
+            TalkingWaveform(
+              isSpeaking: viva.isSpeaking,
+              color: AppTheme.primaryLight,
+            ).animate(target: viva.isSpeaking ? 1 : 0).fadeIn().scaleY(),
 
-          const SizedBox(height: 16),
+            const SizedBox(height: 16),
 
-          QuestionCard(
-            questionText: q.questionText,
-            competency: q.competency,
-            difficulty: q.difficulty,
-            isFollowUp: q.isFollowUp,
-            questionNumber: viva.answeredQuestions + 1,
-            totalQuestions: viva.totalQuestions,
-          ),
+            QuestionCard(
+              questionText: q.questionText,
+              competency: q.competency,
+              difficulty: q.difficulty,
+              isFollowUp: q.isFollowUp,
+              questionNumber: viva.answeredQuestions + 1,
+              totalQuestions: viva.totalQuestions,
+            ),
 
-          // Hint
-          if (viva.hintText != null)
-            Container(
-              margin: const EdgeInsets.only(top: 16),
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: AppTheme.warning.withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(14),
-                border:
-                    Border.all(color: AppTheme.warning.withValues(alpha: 0.2)),
-              ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Icon(Icons.lightbulb_rounded,
-                      color: AppTheme.warning, size: 18),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      viva.hintText!,
-                      style: const TextStyle(
-                          color: AppTheme.warning, fontSize: 13, height: 1.4),
-                    ),
-                  ),
-                ],
-              ),
-            ).animate().fadeIn(duration: 300.ms),
-
-          const SizedBox(height: 24),
-          Text(
-            'Tap the microphone to answer',
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  fontSize: 13,
-                  color: AppTheme.textSecondary.withValues(alpha: 0.7),
+            // Hint
+            if (viva.hintText != null)
+              Container(
+                margin: const EdgeInsets.only(top: 16),
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: AppTheme.warning.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                      color: AppTheme.warning.withValues(alpha: 0.2)),
                 ),
-          ),
-        ],
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.lightbulb_rounded,
+                        color: AppTheme.warning, size: 18),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        viva.hintText!,
+                        style: const TextStyle(
+                            color: AppTheme.warning, fontSize: 13, height: 1.4),
+                      ),
+                    ),
+                  ],
+                ),
+              ).animate().fadeIn(duration: 300.ms),
+
+            const SizedBox(height: 24),
+            Text(
+              'Tap the microphone to answer',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    fontSize: 13,
+                    color: AppTheme.textSecondary.withValues(alpha: 0.7),
+                  ),
+            ),
+          ],
+        ),
       ),
     );
   }

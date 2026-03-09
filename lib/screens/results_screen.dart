@@ -3,6 +3,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
 import '../theme/app_theme.dart';
 import '../viewmodels/viva_viewmodel.dart';
+import '../viewmodels/live_viva_viewmodel.dart';
 import '../models/session.dart';
 import '../widgets/score_gauge.dart';
 import '../widgets/glass_card.dart';
@@ -13,10 +14,21 @@ class ResultsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final viva = context.watch<VivaViewModel>();
+    final liveViva = context.watch<LiveVivaViewModel>();
 
-    final score = viva.finalScore ?? 0;
-    final maxScore = viva.maxScore ?? 1;
-    final competencies = viva.competencySummary ?? [];
+    // Use live viva data if available, otherwise fall back to regular viva
+    final score = liveViva.finalScore ?? viva.finalScore ?? 0;
+    final maxScore = liveViva.maxScore ?? viva.maxScore ?? 1;
+    final competencies =
+        liveViva.competencySummary ?? viva.competencySummary ?? [];
+    final answeredQ = liveViva.questionsScored > 0
+        ? liveViva.questionsScored
+        : viva.answeredQuestions;
+    final totalQ = liveViva.totalQuestions > 0
+        ? liveViva.totalQuestions
+        : viva.totalQuestions;
+    final completionMsg =
+        viva.completionMessage ?? 'Your assessment has been graded.';
 
     return Scaffold(
       body: Container(
@@ -35,7 +47,7 @@ class ResultsScreen extends StatelessWidget {
                 ).animate().fadeIn(duration: 600.ms),
                 const SizedBox(height: 8),
                 Text(
-                  viva.completionMessage ?? 'Your assessment has been graded.',
+                  completionMsg,
                   style: Theme.of(context).textTheme.bodyMedium,
                   textAlign: TextAlign.center,
                 ).animate().fadeIn(delay: 200.ms),
@@ -95,8 +107,7 @@ class ResultsScreen extends StatelessWidget {
                     children: [
                       _SummaryRow(
                           label: 'Questions Answered',
-                          value:
-                              '${viva.answeredQuestions}/${viva.totalQuestions}'),
+                          value: '$answeredQ/$totalQ'),
                       const Divider(color: AppTheme.surfaceLight, height: 24),
                       _SummaryRow(
                           label: 'Final Score',

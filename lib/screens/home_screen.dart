@@ -182,10 +182,12 @@ class _HomeScreenState extends State<HomeScreen> {
                               assignment: assignment,
                               onTap: () {
                                 Navigator.of(context).pushNamed(
-                                  '/verification',
+                                  '/live-viva',
                                   arguments: {
                                     'assignmentId': assignment.assignmentId,
                                     'assignmentTitle': assignment.title,
+                                    'studentName':
+                                        auth.student?.name ?? 'Student',
                                   },
                                 );
                               },

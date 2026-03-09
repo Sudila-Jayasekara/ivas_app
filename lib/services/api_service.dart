@@ -381,6 +381,30 @@ class ApiService {
     debugPrint('$_tag dispose() called');
     _client.close();
   }
+
+  // ── TTS ───────────────────────────────────────────────────────────
+  /// Request realistic TTS audio from the backend. Returns base64 MP3.
+  Future<String?> generateSpeech(String text) async {
+    final url = '$baseUrl/api/v1/assessments/tts';
+    _logRequest('POST', url);
+    try {
+      final res = await _client.post(
+        Uri.parse(url),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'text': text}),
+      );
+      _logResponse('POST', url, res.statusCode, res.body);
+      if (res.statusCode == 200) {
+        final json = jsonDecode(res.body);
+        return json['audio_b64'] as String?;
+      }
+      debugPrint('$_tag TTS request failed: ${res.statusCode}');
+      return null;
+    } catch (e) {
+      _logError('POST', url, e);
+      return null;
+    }
+  }
 }
 
 class ApiException implements Exception {

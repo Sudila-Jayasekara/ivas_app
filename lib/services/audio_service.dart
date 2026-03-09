@@ -120,11 +120,17 @@ class AudioService {
       final bytes = base64Decode(base64Audio);
       final dir = await getTemporaryDirectory();
       final file = File(
-          '${dir.path}/tts_playback_${DateTime.now().millisecondsSinceEpoch}.wav');
+          '${dir.path}/tts_playback_${DateTime.now().millisecondsSinceEpoch}.mp3');
       await file.writeAsBytes(bytes);
       debugPrint('$_tag   Playing: ${file.path}');
+
+      final completer = Completer<void>();
+      player.onPlayerComplete.listen((_) {
+        if (!completer.isCompleted) completer.complete();
+      });
       await player.play(DeviceFileSource(file.path));
-      debugPrint('$_tag ✓ Playback started');
+      await completer.future;
+      debugPrint('$_tag ✓ Playback finished');
     } catch (e) {
       debugPrint('$_tag ✗ playBase64Audio error: $e');
     }

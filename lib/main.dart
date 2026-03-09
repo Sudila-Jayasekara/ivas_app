@@ -53,6 +53,8 @@ class _IvasAppState extends State<IvasApp> {
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
+        Provider<ApiService>.value(value: _apiService),
+        Provider<AudioService>.value(value: _audioService),
         ChangeNotifierProvider(
           create: (_) => AuthViewModel(_apiService),
         ),

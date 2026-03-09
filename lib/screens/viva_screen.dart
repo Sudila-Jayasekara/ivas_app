@@ -2,8 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
-import 'package:flutter_tts/flutter_tts.dart';
 import '../theme/app_theme.dart';
+import '../services/api_service.dart';
+import '../services/audio_service.dart';
 import '../viewmodels/auth_viewmodel.dart';
 import '../viewmodels/viva_viewmodel.dart';
 import '../widgets/animated_mic_button.dart';
@@ -19,7 +20,6 @@ class VivaScreen extends StatefulWidget {
 
 class _VivaScreenState extends State<VivaScreen> with TickerProviderStateMixin {
   late stt.SpeechToText _speech;
-  late FlutterTts _tts;
   bool _speechAvailable = false;
   bool _isSpeaking = false;
   late String? _sessionId;
@@ -31,9 +31,7 @@ class _VivaScreenState extends State<VivaScreen> with TickerProviderStateMixin {
   void initState() {
     super.initState();
     _speech = stt.SpeechToText();
-    _tts = FlutterTts();
     _initSpeech();
-    _initTts();
   }
 
   Future<void> _initSpeech() async {
@@ -44,15 +42,6 @@ class _VivaScreenState extends State<VivaScreen> with TickerProviderStateMixin {
     } catch (e) {
       _speechAvailable = false;
     }
-  }
-
-  Future<void> _initTts() async {
-    await _tts.setLanguage('en-US');
-    await _tts.setSpeechRate(0.45);
-    await _tts.setPitch(1.0);
-    _tts.setCompletionHandler(() {
-      setState(() => _isSpeaking = false);
-    });
   }
 
   @override
@@ -87,15 +76,27 @@ class _VivaScreenState extends State<VivaScreen> with TickerProviderStateMixin {
       );
     }
 
-    // Speak the current question
+    // Speak the current question via backend TTS
     if (viva.currentQuestion != null) {
       _speakQuestion(viva.currentQuestion!.questionText);
     }
   }
 
+  /// Request realistic TTS audio from the backend and play it.
   Future<void> _speakQuestion(String text) async {
     setState(() => _isSpeaking = true);
-    await _tts.speak(text);
+    try {
+      final api = context.read<ApiService>();
+      final audio = context.read<AudioService>();
+      final audioB64 = await api.generateSpeech(text);
+      if (audioB64 != null && audioB64.isNotEmpty) {
+        await audio.playBase64Audio(audioB64);
+      }
+    } catch (e) {
+      debugPrint('[VivaScreen] TTS error: $e');
+    } finally {
+      if (mounted) setState(() => _isSpeaking = false);
+    }
   }
 
   Future<void> _toggleListening() async {
@@ -174,7 +175,6 @@ class _VivaScreenState extends State<VivaScreen> with TickerProviderStateMixin {
   @override
   void dispose() {
     _speech.stop();
-    _tts.stop();
     super.dispose();
   }
 
@@ -381,7 +381,7 @@ class _VivaScreenState extends State<VivaScreen> with TickerProviderStateMixin {
                       color: AppTheme.primaryLight, size: 18),
                   const SizedBox(width: 8),
                   const Text(
-                    'Reading question...',
+                    'Speaking...',
                     style: TextStyle(
                       color: AppTheme.primaryLight,
                       fontSize: 13,

@@ -14,7 +14,6 @@ dependencies:
   http: ^1.2.1
   web_socket_channel: ^3.0.3
   speech_to_text: ^7.0.0
-  flutter_tts: ^4.2.0
   record: ^6.0.0
   google_fonts: ^6.2.1
   flutter_animate: ^4.5.2

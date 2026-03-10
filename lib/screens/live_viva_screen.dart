@@ -7,7 +7,7 @@ import '../viewmodels/live_viva_viewmodel.dart';
 import '../widgets/glass_card.dart';
 
 /// Immersive live viva screen — student talks naturally to an AI instructor.
-/// No buttons to tap. Just speak and listen. Like a real face-to-face viva.
+/// Includes manual mic control so students can explicitly start/stop speaking.
 class LiveVivaScreen extends StatefulWidget {
   const LiveVivaScreen({super.key});
 
@@ -20,7 +20,6 @@ class _LiveVivaScreenState extends State<LiveVivaScreen>
   late AnimationController _pulseController;
   late AnimationController _waveController;
   bool _initialized = false;
-  final _textController = TextEditingController();
 
   @override
   void initState() {
@@ -65,7 +64,7 @@ class _LiveVivaScreenState extends State<LiveVivaScreen>
   void dispose() {
     _pulseController.dispose();
     _waveController.dispose();
-    _textController.dispose();
+
     super.dispose();
   }
 
@@ -162,10 +161,13 @@ class _LiveVivaScreenState extends State<LiveVivaScreen>
       case LiveVivaState.connecting:
         return _buildConnectingView();
 
-      case LiveVivaState.instructorSpeaking:
-        return _buildInstructorSpeakingView();
-
-      case LiveVivaState.studentSpeaking:
+      case LiveVivaState.active:
+        // During active conversation, show instructor or student visual
+        // depending on who is speaking
+        if (vm.geminiSpeaking) {
+          return _buildInstructorSpeakingView();
+        }
+        // Student's turn — show mic visualization
         return _buildStudentSpeakingView();
 
       case LiveVivaState.evaluating:
@@ -229,10 +231,6 @@ class _LiveVivaScreenState extends State<LiveVivaScreen>
   }
 
   Widget _buildStudentSpeakingView() {
-    final vm = context.read<LiveVivaViewModel>();
-    if (vm.isTextMode) {
-      return _buildTextInputView(vm);
-    }
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -247,7 +245,7 @@ class _LiveVivaScreenState extends State<LiveVivaScreen>
           ),
           const SizedBox(height: 16),
           const Text(
-            'Just answer naturally, like talking to a real instructor',
+            'Tap the mic button below, then answer naturally',
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
             textAlign: TextAlign.center,
           ),
@@ -450,60 +448,96 @@ class _LiveVivaScreenState extends State<LiveVivaScreen>
   }
 
   Widget _buildBottomInfo(LiveVivaViewModel vm) {
-    if (vm.state == LiveVivaState.error ||
-        vm.state == LiveVivaState.complete ||
-        vm.state == LiveVivaState.idle ||
-        vm.state == LiveVivaState.connecting ||
-        vm.state == LiveVivaState.evaluating) {
+    if (vm.state != LiveVivaState.active) {
       return const SizedBox(height: 20);
     }
+
+    final statusText = vm.geminiSpeaking
+        ? 'Instructor is speaking...'
+        : vm.isMicEnabled
+            ? 'Mic is ON — speak now'
+            : 'Mic is OFF — tap to start';
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
       child: GlassCard(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-        child: Row(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Container(
-              width: 8,
-              height: 8,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: vm.isInstructorSpeaking
-                    ? AppTheme.primary
-                    : vm.isStudentSpeaking
-                        ? AppTheme.accent
-                        : AppTheme.textSecondary,
-              ),
-            )
-                .animate(
-                  onPlay: (c) => c.repeat(reverse: true),
+            Row(
+              children: [
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color:
+                        vm.geminiSpeaking ? AppTheme.primary : AppTheme.accent,
+                  ),
                 )
-                .fadeIn()
-                .then()
-                .fadeOut(duration: 800.ms),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                vm.isInstructorSpeaking
-                    ? 'Instructor is speaking...'
-                    : vm.isStudentSpeaking
-                        ? 'Microphone active — speak naturally'
-                        : 'Preparing...',
-                style: const TextStyle(
-                  color: AppTheme.textSecondary,
-                  fontSize: 13,
+                    .animate(
+                      onPlay: (c) => c.repeat(reverse: true),
+                    )
+                    .fadeIn()
+                    .then()
+                    .fadeOut(duration: 800.ms),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    statusText,
+                    style: const TextStyle(
+                      color: AppTheme.textSecondary,
+                      fontSize: 13,
+                    ),
+                  ),
                 ),
-              ),
+                if (vm.questionsScored > 0)
+                  Text(
+                    '${vm.questionsScored}/${vm.totalQuestions} scored',
+                    style: TextStyle(
+                      color: AppTheme.textSecondary.withValues(alpha: 0.7),
+                      fontSize: 12,
+                    ),
+                  ),
+              ],
             ),
-            if (vm.questionsScored > 0)
-              Text(
-                '${vm.questionsScored}/${vm.totalQuestions} scored',
-                style: TextStyle(
-                  color: AppTheme.textSecondary.withValues(alpha: 0.7),
-                  fontSize: 12,
+            ...[
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: vm.geminiSpeaking
+                      ? null
+                      : () async {
+                          await vm.toggleMic();
+                        },
+                  style: FilledButton.styleFrom(
+                    backgroundColor: vm.isMicEnabled
+                        ? AppTheme.error.withValues(alpha: 0.9)
+                        : AppTheme.accent,
+                    foregroundColor: Colors.white,
+                    disabledBackgroundColor:
+                        AppTheme.surfaceLight.withValues(alpha: 0.6),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                  icon: Icon(
+                    vm.geminiSpeaking
+                        ? Icons.hearing_rounded
+                        : vm.isMicEnabled
+                            ? Icons.mic_off_rounded
+                            : Icons.mic_rounded,
+                  ),
+                  label: Text(
+                    vm.geminiSpeaking
+                        ? 'Wait for instructor to finish'
+                        : vm.isMicEnabled
+                            ? 'Stop Mic'
+                            : 'Start Mic and Talk',
+                  ),
                 ),
               ),
+            ],
           ],
         ),
       ),
@@ -539,68 +573,5 @@ class _LiveVivaScreenState extends State<LiveVivaScreen>
         ],
       ),
     );
-  }
-
-  Widget _buildTextInputView(LiveVivaViewModel vm) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24),
-      child: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.keyboard_rounded,
-                color: AppTheme.accent, size: 48),
-            const SizedBox(height: 16),
-            Text(
-              'Your turn \u2014 type your answer',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    color: AppTheme.accent,
-                  ),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'Simulator mode \u2014 type instead of speaking',
-              style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
-            ),
-            const SizedBox(height: 24),
-            GlassCard(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _textController,
-                      style: const TextStyle(color: AppTheme.textPrimary),
-                      decoration: const InputDecoration(
-                        hintText: 'Type your answer...',
-                        hintStyle: TextStyle(color: AppTheme.textSecondary),
-                        border: InputBorder.none,
-                      ),
-                      maxLines: 3,
-                      minLines: 1,
-                      textInputAction: TextInputAction.send,
-                      onSubmitted: (_) => _sendTextAnswer(vm),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton(
-                    onPressed: () => _sendTextAnswer(vm),
-                    icon:
-                        const Icon(Icons.send_rounded, color: AppTheme.accent),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    ).animate().fadeIn(duration: 300.ms);
-  }
-
-  void _sendTextAnswer(LiveVivaViewModel vm) {
-    final text = _textController.text.trim();
-    if (text.isEmpty) return;
-    vm.sendTextMessage(text);
-    _textController.clear();
   }
 }
